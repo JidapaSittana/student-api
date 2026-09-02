@@ -11,6 +11,16 @@ const PORT = process.env.PORT || 3000;
 const schema = require("./schema");
 const query = require("./resolvers");
 
+
+const { redisClient, connectRedis } = require("./cache");
+
+const v1Router = express.Router();
+const v2Router = express.Router();
+const { parsePagination, parseSort } = require("./middlewares/query-parser");
+const { authenticateToken, authorizeRole } = require("./middlewares/auth");
+
+
+
 //app.use(express.json());
 
 // ลำดับ middleware มีความสำคัญ: security header → CORS → logger → body parser
@@ -67,14 +77,124 @@ app.get("/", (req, res) => {
 //   { id: 102, courseName: "โครงสร้างข้อมูล", credit: 3 },
 // ];
 
-app.get("/api/v1/students", async (req, res, next) => {
+// app.get("/api/v1/students", async (req, res, next) => {
+//   try {
+//     const [rows] = await pool.query("SELECT * FROM students");
+//     res.status(200).json({ message: "สำเร็จ", data: rows });
+//   } catch (err) {
+//     next(err);
+//   }
+// });
+
+v1Router.get(
+  "/students",
+  parsePagination,
+  parseSort,
+  async (req, res, next) => {
+    const { major } = req.query;
+    const { page, limit, offset } = req.pagination;
+    const { field, order } = req.sort;
+
+    let baseQuery = "SELECT * FROM students";
+    let countQuery = "SELECT COUNT(*) AS total FROM students";
+    const params = [];
+
+    if (major) {
+      baseQuery += " WHERE major = ?";
+      countQuery += " WHERE major = ?";
+      params.push(major);
+    }
+
+    // แทรก field/order ลง SQL ได้โดยตรงเฉพาะเพราะผ่าน allowlist ใน parseSort มาแล้ว
+    // ห้ามนำรูปแบบนี้ไปใช้กับค่าจาก req อื่นที่ไม่ได้ผ่าน allowlist
+    baseQuery += ` ORDER BY ${field} ${order} LIMIT ? OFFSET ?`;
+
+    try {
+      const [rows] = await pool.query(baseQuery, [...params, limit, offset]);
+      const [[{ total }]] = await pool.query(countQuery, params);
+
+      res.status(200).json({
+        message: "สำเร็จ",
+        data: rows,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ... route อื่น ๆ ทั้งหมดของ v1 (register, login, courses ฯลฯ) ย้ายมาไว้ที่นี่ในลักษณะเดียวกัน ...
+
+
+
+// ... route อื่น ๆ ทั้งหมดของ v1 (register, login, courses ฯลฯ) ย้ายมาไว้ที่นี่ในลักษณะเดียวกัน ...
+
+
+
+
+v2Router.get("/students", async (req, res, next) => {
   try {
     const [rows] = await pool.query("SELECT * FROM students");
-    res.status(200).json({ message: "สำเร็จ", data: rows });
+    // v2 ปรับโครงสร้างผลลัพธ์ใหม่ ไม่มี wrapper "message" เหมือน v1
+    res.status(200).json({ items: rows, count: rows.length });
   } catch (err) {
     next(err);
   }
 });
+
+app.use("/api/v2", v2Router);
+
+
+// app.get(
+//   "/api/v1/students",
+//   parsePagination,
+//   parseSort,
+//   async (req, res, next) => {
+//     const { major } = req.query;
+//     const { page, limit, offset } = req.pagination;
+//     const { field, order } = req.sort;
+
+//     let baseQuery = "SELECT * FROM students";
+//     let countQuery = "SELECT COUNT(*) AS total FROM students";
+//     const params = [];
+
+//     if (major) {
+//       baseQuery += " WHERE major = ?";
+//       countQuery += " WHERE major = ?";
+//       params.push(major);
+//     }
+
+//     // แทรก field/order ลง SQL ได้โดยตรงเฉพาะเพราะผ่าน allowlist ใน parseSort มาแล้ว
+//     // ห้ามนำรูปแบบนี้ไปใช้กับค่าจาก req อื่นที่ไม่ได้ผ่าน allowlist
+//     baseQuery += ` ORDER BY ${field} ${order} LIMIT ? OFFSET ?`;
+
+//     try {
+//       const [rows] = await pool.query(baseQuery, [...params, limit, offset]);
+//       const [[{ total }]] = await pool.query(countQuery, params);
+
+//       res.status(200).json({
+//         message: "สำเร็จ",
+//         data: rows,
+//         pagination: {
+//           page,
+//           limit,
+//           total,
+//           totalPages: Math.ceil(total / limit),
+//         },
+//       });
+//     } catch (err) {
+//       next(err);
+//     }
+//   },
+// );
+
+
 
 app.get("/api/v1/students/:id", async (req, res, next) => {
   try {
@@ -94,6 +214,34 @@ app.get("/api/v1/students/:id", async (req, res, next) => {
   }
 });
 
+// app.post("/api/v1/students", async (req, res, next) => {
+  // const { name, major, email } = req.body;
+
+  // if (!name || !major || !email) {
+  //   return res.status(400).json({
+  //     error: { code: "VALIDATION_ERROR", message: "กรุณาระบุข้อมูลให้ครบถ้วน" },
+  //   });
+  // }
+
+//   try {
+//     const [result] = await pool.query(
+//       "INSERT INTO students (name, major, email) VALUES (?, ?, ?)",
+//       [name, major, email],
+//     );
+//     res.status(201).json({
+//       message: "เพิ่มข้อมูลสำเร็จ",
+//       data: { id: result.insertId, name, major, email },
+//     });
+//   } catch (err) {
+//     if (err.code === "ER_DUP_ENTRY") {
+//       return res.status(409).json({
+//         error: { code: "DUPLICATE_EMAIL", message: "อีเมลนี้มีอยู่ในระบบแล้ว" },
+//       });
+//     }
+//     next(err);
+//   }
+// });
+
 app.post("/api/v1/students", async (req, res, next) => {
   const { name, major, email } = req.body;
 
@@ -108,6 +256,9 @@ app.post("/api/v1/students", async (req, res, next) => {
       "INSERT INTO students (name, major, email) VALUES (?, ?, ?)",
       [name, major, email],
     );
+
+    await redisClient.del("students:all"); // ล้างแคชเนื่องจากข้อมูลเปลี่ยนแปลงแล้ว
+
     res.status(201).json({
       message: "เพิ่มข้อมูลสำเร็จ",
       data: { id: result.insertId, name, major, email },
@@ -121,6 +272,7 @@ app.post("/api/v1/students", async (req, res, next) => {
     next(err);
   }
 });
+
 
 app.post("/api/v1/students/:id/enrollments", async (req, res, next) => {
   const studentId = req.params.id;
@@ -177,7 +329,6 @@ app.post("/api/v1/students/:id/enrollments", async (req, res, next) => {
   }
 });
 
-const { authenticateToken, authorizeRole } = require("./middlewares/auth");
 
 app.delete(
   "/api/v1/students/:id",
@@ -289,6 +440,16 @@ app.post("/api/v1/auth/login", async (req, res, next) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Server กำลังทำงานที่พอร์ต ${PORT} (${process.env.NODE_ENV})`);
-});
+app.use("/api/v1", v1Router);
+
+
+connectRedis()
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`Server กำลังทำงานที่พอร์ต ${PORT}`);
+    });
+  })
+  .catch((err) => {
+    console.error("เชื่อมต่อ Redis ไม่สำเร็จ เซิร์ฟเวอร์จะไม่เริ่มทำงาน:", err);
+    process.exit(1);
+  });
