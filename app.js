@@ -1,25 +1,19 @@
-const pool = require("./db");
-
+// app.js
 const express = require("express");
 const helmet = require("helmet");
 const cors = require("cors");
 const morgan = require("morgan");
-
-const app = express();
-const PORT = process.env.PORT || 3000;
-// const { graphqlHTTP } = require("express-graphql");
-const schema = require("./schema");
-const query = require("./resolvers");
-
-const { redisClient, connectRedis } = require("./cache");
-
-const v1Router = express.Router();
-const v2Router = express.Router();
+// ... import middleware, route ทั้งหมดที่มีอยู่เดิมใน index.js ...
 const { parsePagination, parseSort } = require("./middlewares/query-parser");
 const { authenticateToken, authorizeRole } = require("./middlewares/auth");
 
-app.use("/api/v1", v1Router);
-app.use("/api/v2", v2Router);
+const { redisClient } = require("./cache");
+
+const v1Router = express.Router();
+const v2Router = express.Router();
+
+const app = express();
+const pool = require("./db");
 
 const {
   hashPassword,
@@ -37,6 +31,11 @@ app.use(
 app.use(morgan("dev"));
 app.use(express.json({ limit: "10kb" }));
 
+// เพิ่ม
+app.use("/api/v1", v1Router);
+app.use("/api/v2", v2Router);
+
+// ... นำ route ทั้งหมดจาก index.js เดิมมาไว้ที่นี่ (auth, students, cache) ...
 app.get("/", (req, res) => {
   res.status(200).json({ message: "Student API พร้อมใช้งาน" });
 });
@@ -144,6 +143,13 @@ app.post("/api/v1/students", async (req, res, next) => {
 app.post("/api/v1/students/:id/enrollments", async (req, res, next) => {
   const studentId = req.params.id;
   const { courseId } = req.body;
+
+  if (!courseId) {
+    return res.status(400).json({
+      error: { code: "VALIDATION_ERROR", message: "กรุณาระบุ courseId" },
+    });
+  }
+
   const connection = await pool.getConnection();
 
   try {
@@ -300,13 +306,12 @@ app.post("/api/v1/auth/login", async (req, res, next) => {
   }
 });
 
-connectRedis()
-  .then(() => {
-    app.listen(PORT, () => {
-      console.log(`Server กำลังทำงานที่พอร์ต ${PORT}`);
-    });
-  })
-  .catch((err) => {
-    console.error("เชื่อมต่อ Redis ไม่สำเร็จ เซิร์ฟเวอร์จะไม่เริ่มทำงาน:", err);
-    process.exit(1);
+// Error handling middleware (จากสัปดาห์ที่ 4)
+app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(500).json({
+    error: { code: "INTERNAL_ERROR", message: "เกิดข้อผิดพลาดภายในระบบ" },
   });
+});
+
+module.exports = app;
