@@ -1,0 +1,203 @@
+openapi: 3.0.3
+info:
+  title: Student API
+  description: API สำหรับจัดการข้อมูลนิสิต พัฒนาในรายวิชา 88736065
+  version: 1.0.0
+servers:
+  - url: http://localhost:3000/api/v1
+    description: Development server
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              example: "VALIDATION_ERROR"
+            message:
+              type: string
+paths:
+  # Authentication
+  /auth/register:
+    post:
+      summary: สมัครสมาชิกใหม่
+      tags:
+        - Auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  example: "student1@buu.ac.th"
+                password:
+                  type: string
+                  example: "password123"
+      responses:
+        "201":
+          description: สมัครสมาชิกสำเร็จ
+        "400":
+          description: Validation Error - ข้อมูลไม่ครบถ้วน
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Duplicate Email - อีเมลนี้มีอยู่ในระบบแล้ว
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/login:
+    post:
+      summary: ล็อกอินเข้าสู่ระบบ
+      tags:
+        - Auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  example: "student1@buu.ac.th"
+                password:
+                  type: string
+                  example: "password123"
+      responses:
+        "200":
+          description: เข้าสู่ระบบสำเร็จ ได้รับ Token
+        "400":
+          description: Validation Error - ข้อมูลไม่ครบ
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Invalid Credentials - อีเมลหรือรหัสผ่านไม่ถูกต้อง
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/me:
+    get:
+      summary: ข้อมูลผู้ใช้งานปัจจุบัน
+      tags:
+        - Auth
+      security:
+        - bearerAuth: [] # บังคับให้ยืนยันตัวตน
+      responses:
+        "200":
+          description: สำเร็จ
+        "401":
+          description: ไม่ได้แนบ Token หรือ Token หมดอายุ
+
+  # Students (CRUD)
+  /students:
+    get:
+      summary: ดึงรายชื่อนิสิตทั้งหมด
+      tags:
+        - Students
+      description: ดึงข้อมูลนิสิตมีระบบ Pagination และจะดึงจาก Cache (Redis) ถ้ามีการแคชไว้
+      parameters:
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+          description: หน้าที่ต้องการแสดง
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 10
+          description: จำนวนข้อมูลต่อหน้า
+        - in: query
+          name: major
+          schema:
+            type: string
+          description: ค้นหาตามสาขาวิชา
+      responses:
+        "200":
+          description: ดึงข้อมูลสำเร็จ พร้อม Pagination
+
+    post:
+      summary: เพิ่มข้อมูลนิสิตใหม่
+      tags:
+        - Students
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                major:
+                  type: string
+                email:
+                  type: string
+      responses:
+        "201":
+          description: เพิ่มข้อมูลสำเร็จ
+        "400":
+          description: ข้อมูลไม่ครบถ้วน
+        "409":
+          description: อีเมลซ้ำ
+
+  /students/{id}:
+    get:
+      summary: ดึงข้อมูลนิสิตรายบุคคล
+      tags:
+        - Students
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+          description: รหัส ID นิสิต
+      responses:
+        "200":
+          description: พบข้อมูล
+        "404":
+          description: ไม่พบข้อมูลนิสิต
+
+    delete:
+      summary: ลบข้อมูลนิสิต
+      tags:
+        - Students
+      security:
+        - bearerAuth: [] # บังคับให้ยืนยันตัวตน
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+          description: รหัส ID ของนิสิตที่ต้องการลบ
+      responses:
+        "200":
+          description: ลบข้อมูลสำเร็จ
+        "401":
+          description: ไม่ได้แนบ Token หรือ Token ผิด
+        "403":
+          description: ไม่มีสิทธิ์ (จำกัดเฉพาะ admin)
+        "404":
+          description: ไม่พบข้อมูลนิสิต

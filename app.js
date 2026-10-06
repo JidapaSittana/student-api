@@ -7,13 +7,26 @@ const morgan = require("morgan");
 const { parsePagination, parseSort } = require("./middlewares/query-parser");
 const { authenticateToken, authorizeRole } = require("./middlewares/auth");
 
-const { redisClient } = require("./cache");
+// const { redisClient } = require("./cache");
 
 const v1Router = express.Router();
 const v2Router = express.Router();
 
 const app = express();
 const pool = require("./db");
+
+const swaggerUi = require("swagger-ui-express");
+const YAML = require("js-yaml");
+const fs = require("fs");
+const path = require("path");
+
+// โหลดไฟล์ openapi.yaml
+const openapiDocument = YAML.load(
+  fs.readFileSync(path.join(__dirname, "openapi.yaml"), "utf8"),
+);
+
+// สร้าง Route สำหรับหน้า Swagger UI
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(openapiDocument));
 
 const {
   hashPassword,
@@ -124,7 +137,7 @@ app.post("/api/v1/students", async (req, res, next) => {
       [name, major, email],
     );
 
-    await redisClient.del("students:all"); // ล้างแคชเนื่องจากข้อมูลเปลี่ยนแปลงแล้ว
+    // await redisClient.del("students:all"); // ล้างแคชเนื่องจากข้อมูลเปลี่ยนแปลงแล้ว
 
     res.status(201).json({
       message: "เพิ่มข้อมูลสำเร็จ",
