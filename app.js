@@ -1,11 +1,17 @@
-// app.js
 const express = require("express");
 const helmet = require("helmet");
 const cors = require("cors");
 const morgan = require("morgan");
-// ... import middleware, route ทั้งหมดที่มีอยู่เดิมใน index.js ...
+
+const { getStudentEnrichment } = require("./services/enrichment-service");
+
+// import middleware, route ทั้งหมดที่มีอยู่เดิมใน index.js
 const { parsePagination, parseSort } = require("./middlewares/query-parser");
 const { authenticateToken, authorizeRole } = require("./middlewares/auth");
+
+// week12 Import Zod Schema และ Rate Limiters
+const { createStudentSchema } = require("./schemas/studentSchema");
+const { authLimiter, generalLimiter } = require("./middlewares/rateLimiter");
 
 // const { redisClient } = require("./cache");
 
@@ -44,11 +50,16 @@ app.use(
 app.use(morgan("dev"));
 app.use(express.json({ limit: "10kb" }));
 
+// week12 ตั้งค่า Rate Limiter
+app.set("trust proxy", 1);
+app.use(generalLimiter); // บังคับใช้ generalLimiter กับทุก request หลัง express.json()
+app.use("/api/v1/auth/login", authLimiter); // บังคับใช้ authLimiter เฉพาะเส้นทาง login ก่อนเข้าถึง route
+
 // เพิ่ม
 app.use("/api/v1", v1Router);
 app.use("/api/v2", v2Router);
 
-// ... นำ route ทั้งหมดจาก index.js เดิมมาไว้ที่นี่ (auth, students, cache) ...
+// เอา route ทั้งหมดจาก index.js เดิมมาไว้ที่นี่ (auth, students, cache)
 app.get("/", (req, res) => {
   res.status(200).json({ message: "Student API พร้อมใช้งาน" });
 });
@@ -122,14 +133,45 @@ app.get("/api/v1/students/:id", async (req, res, next) => {
   }
 });
 
-app.post("/api/v1/students", async (req, res, next) => {
-  const { name, major, email } = req.body;
+// week11 ข้อมูลเสริมจาก Public API ข้างนอก พร้อม Retry/Timeout/Fallback
+app.get(
+  "/api/v1/students/:id/enrichment",
+  authenticateToken,
+  async (req, res, next) => {
+    try {
+      const enrichment = await getStudentEnrichment(req.params.id);
 
-  if (!name || !major || !email) {
+      return res.status(200).json({
+        data: {
+          studentId: req.params.id,
+          enrichment,
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// week12 ปรับ POST /api/v1/students ใช้ Zod Validation
+app.post("/api/v1/students", async (req, res, next) => {
+  // 1. ตรวจสอบ validation ด้วย createStudentSchema
+  const result = createStudentSchema.safeParse(req.body);
+  if (!result.success) {
     return res.status(400).json({
-      error: { code: "VALIDATION_ERROR", message: "กรุณาระบุข้อมูลให้ครบถ้วน" },
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "ข้อมูลที่ส่งมาไม่ถูกต้อง",
+        details: result.error.issues.map((issue) => ({
+          field: issue.path.join("."),
+          message: issue.message,
+        })),
+      },
     });
   }
+
+  // 2.ดึงเฉพาะข้อมูลที่ผ่านการตรวจสอบแล้ว (result.data) มาใช้งาน
+  const { name, major, email } = result.data;
 
   try {
     const [result] = await pool.query(
@@ -137,7 +179,7 @@ app.post("/api/v1/students", async (req, res, next) => {
       [name, major, email],
     );
 
-    // await redisClient.del("students:all"); // ล้างแคชเนื่องจากข้อมูลเปลี่ยนแปลงแล้ว
+    // await redisClient.del("students:all"); // ล้างแคชเพราะข้อมูลเปลี่ยน
 
     res.status(201).json({
       message: "เพิ่มข้อมูลสำเร็จ",
@@ -236,7 +278,7 @@ app.delete(
   },
 );
 
-// เพิ่ม route ใหม่: เฉพาะผู้ที่ล็อกอินแล้วเท่านั้นที่ดูข้อมูลของตนเองได้
+// เพิ่ม route ใหม่ เฉพาะคนที่ล็อกอินเท่านั้นที่ดูข้อมูลของตัวเองได้
 app.get("/api/v1/auth/me", authenticateToken, (req, res) => {
   res.status(200).json({ message: "สำเร็จ", data: req.user });
 });
@@ -319,7 +361,7 @@ app.post("/api/v1/auth/login", async (req, res, next) => {
   }
 });
 
-// Error handling middleware (จากสัปดาห์ที่ 4)
+// Error handling middleware (week 4)
 app.use((err, req, res, next) => {
   console.error(err);
   res.status(500).json({
